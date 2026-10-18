@@ -31,3 +31,14 @@ Mes sources sont stocké sur github.
 uvicorn main:app --reload
 ```
 
+## Prompt pour initialiser la plateforme data
+
+*Peux tu me créer un fichier .yml pour générer l'environnement docker avec les éléments suivant :
+
+- *Moteur de calcul : Trino
+- *Stockage : Minio
+- *Catalogue Data : Polaris
+- *Format de stockage : IceBerg
+- *Ingestion Transformation : DBT / Python
+- *Orchestration : Airflow
+- *Architecture Data : Medaillon (Bronze/Silver/Gold)
