@@ -6,7 +6,7 @@ Création d'une plateforme Data agnostique flexible économique gouvernée durab
 ## Stack technique
 
 - Moteur de calcul : Trino
-- Stockage : Minio
+- Stockage : RustFS
 - Catalogue Data : Polaris
 - Format de stockage : IceBerg
 - Ingestion Transformation : DBT / Python
@@ -36,7 +36,7 @@ uvicorn main:app --reload
 *Peux tu me créer un fichier .yml pour générer l'environnement docker avec les éléments suivant :
 
 - *Moteur de calcul : Trino
-- *Stockage : Minio
+- *Stockage : RustFS
 - *Catalogue Data : Polaris
 - *Format de stockage : IceBerg
 - *Ingestion Transformation : DBT / Python
