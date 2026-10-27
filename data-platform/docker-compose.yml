@@ -11,7 +11,7 @@ services:
     command: /data
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-admin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-change_me_to_a_long_secret}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-admin}
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ENABLE: "true"
@@ -40,7 +40,7 @@ services:
         condition: service_healthy
     environment:
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-admin}
-      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-change_me_to_a_long_secret}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-admin}
       AWS_DEFAULT_REGION: us-east-1
       AWS_ENDPOINT_URL: http://rustfs:9000
     entrypoint: ["/bin/sh", "-c"]
@@ -65,7 +65,7 @@ services:
       POLARIS_BOOTSTRAP_CREDENTIALS: "POLARIS,root,s3cr3t"
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-admin}
-      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-change_me_to_a_long_secret}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-admin}
       quarkus.otel.sdk.disabled: "true"
       polaris.realm-context.realms: POLARIS
     ports:

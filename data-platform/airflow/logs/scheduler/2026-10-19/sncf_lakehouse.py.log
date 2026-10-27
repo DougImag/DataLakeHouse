@@ -1391,3 +1391,10 @@
 [2026-10-19T14:35:10.433+0000] {logging_mixin.py:190} INFO - [2026-10-19T14:35:10.433+0000] {dag.py:3239} INFO - Sync 1 DAGs
 [2026-10-19T14:35:10.469+0000] {logging_mixin.py:190} INFO - [2026-10-19T14:35:10.469+0000] {dag.py:4180} INFO - Setting next_dagrun for sncf_lakehouse_medallion to 2026-10-18 00:00:00+00:00, run_after=2026-10-19 00:00:00+00:00
 [2026-10-19T14:35:10.498+0000] {processor.py:208} INFO - Processing /opt/airflow/dags/sncf_lakehouse.py took 0.154 seconds
+[2026-10-19T14:35:40.782+0000] {processor.py:186} INFO - Started process (PID=1166) to work on /opt/airflow/dags/sncf_lakehouse.py
+[2026-10-19T14:35:40.785+0000] {processor.py:914} INFO - Processing file /opt/airflow/dags/sncf_lakehouse.py for tasks to queue
+[2026-10-19T14:35:40.789+0000] {logging_mixin.py:190} INFO - [2026-10-19T14:35:40.788+0000] {dagbag.py:588} INFO - Filling up the DagBag from /opt/airflow/dags/sncf_lakehouse.py
+[2026-10-19T14:35:40.822+0000] {processor.py:925} INFO - DAG(s) 'sncf_lakehouse_medallion' retrieved from /opt/airflow/dags/sncf_lakehouse.py
+[2026-10-19T14:35:40.859+0000] {logging_mixin.py:190} INFO - [2026-10-19T14:35:40.858+0000] {dag.py:3239} INFO - Sync 1 DAGs
+[2026-10-19T14:35:40.888+0000] {logging_mixin.py:190} INFO - [2026-10-19T14:35:40.888+0000] {dag.py:4180} INFO - Setting next_dagrun for sncf_lakehouse_medallion to 2026-10-18 00:00:00+00:00, run_after=2026-10-19 00:00:00+00:00
+[2026-10-19T14:35:40.916+0000] {processor.py:208} INFO - Processing /opt/airflow/dags/sncf_lakehouse.py took 0.140 seconds

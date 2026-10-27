@@ -42,3 +42,12 @@ uvicorn main:app --reload
 - *Ingestion Transformation : DBT / Python
 - *Orchestration : Airflow
 - *Architecture Data : Medaillon (Bronze/Silver/Gold)
+
+```
+set -a; source <(sed 's/\r$//' .env); set +a
+export DOCKER_NETWORK=$(docker inspect trino --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+export MSYS_NO_PATHCONV=1
+export TRINO_PROPS=./chemin/vers/iceberg.properties   # tant que tu ne l'as pas retrouvé, le sed sera ignoré
+
+./setup_lakehouse.sh
+```
