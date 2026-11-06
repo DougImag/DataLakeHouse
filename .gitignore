@@ -10,3 +10,4 @@ data-platform/dbt/.user.yml
 # Logs Airflow : contenu ignoré, dossier conservé (doit exister avant le montage Docker)
 data-platform/airflow/logs/*
 !data-platform/airflow/logs/.gitkeep
+extraction-data-api/data/**
