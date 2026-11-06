@@ -1,0 +1,27 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Données brutes chargées par data-platform/ingest_bronze.py.
+      Toutes les colonnes du CSV source sont en VARCHAR, sans transformation.
+    database: iceberg
+    schema: bronze
+    tables:
+      - name: frequentation_sncf_v2
+        description: >
+          Export brut du jeu de données SNCF « Fréquentation en gares »
+          (data.sncf.com) : une ligne par gare, une colonne par année.
+        columns:
+          - name: code_uic_complet
+            description: Code UIC de la gare (8 chiffres).
+            data_tests:
+              - not_null
+          - name: nom_gare
+            description: Nom de la gare.
+          - name: code_postal
+            description: Code postal (le zéro initial est parfois absent dans la source).
+          - name: source_fichier
+            description: Nom du fichier CSV ingéré (colonne technique).
+          - name: date_ingestion
+            description: Horodatage UTC de l'ingestion (colonne technique).

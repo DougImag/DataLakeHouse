@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 POLARIS_URL="http://localhost:8181"
@@ -23,3 +22,11 @@ fi
 export TOKEN
 echo "Jeton Polaris recupere avec succes."
 echo "Le jeton est disponible dans la variable TOKEN."
+# Image Airflow du projet : Airflow officiel + un environnement Python
+# séparé pour le code du projet (extraction, ingestion Bronze, dbt).
+#
+# Le venv séparé évite tout conflit entre les dépendances d'Airflow et
+# celles du projet (pandas 3, dbt-core...). Les tâches du DAG appellent
+# directement /opt/dlh-venv/bin/python et /opt/dlh-venv/bin/dbt.
+#
+# Contexte de build : la racine du dépôt (voir docker-compose.yml).

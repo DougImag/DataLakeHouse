@@ -1,0 +1,37 @@
+name: sncf_lakehouse
+version: "1.0.0"
+config-version: 2
+
+profile: sncf_lakehouse
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages", "logs"]
+
+models:
+  sncf_lakehouse:
+    # Tables Iceberg au format Parquet, remplacées de façon atomique
+    # (CREATE OR REPLACE TABLE) : un nouveau snapshot Iceberg à chaque run.
+    +materialized: table
+    +on_table_exists: replace
+    +properties:
+      format: "'PARQUET'"
+      format_version: "2"
+
+    silver:
+      +schema: silver
+      +tags: ["silver"]
+
+    gold:
+      +schema: gold
+      +tags: ["gold"]
+
+data_tests:
+  sncf_lakehouse:
+    +severity: error
+
+flags:
+  # Trino local en HTTP : supprime l avertissement sur la validation SSL
+  require_certificate_validation: true

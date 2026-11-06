@@ -1,0 +1,79 @@
+version: 2
+
+models:
+  - name: slv_gares
+    description: >
+      Référentiel des gares : une ligne par gare, colonnes typées et nettoyées
+      (chaînes vides remplacées par NULL, code postal sur 5 chiffres).
+    data_tests:
+      - combinaison_unique:
+          colonnes: [code_uic]
+    columns:
+      - name: code_uic
+        description: Code UIC de la gare (8 chiffres), clé primaire.
+        data_tests:
+          - not_null
+          - format_regex:
+              regex: '^[0-9]{8}$'
+      - name: nom_gare
+        description: Nom de la gare.
+        data_tests:
+          - not_null
+      - name: code_postal
+        description: Code postal sur 5 chiffres (zéro initial restauré).
+        data_tests:
+          - not_null
+          - format_regex:
+              regex: '^[0-9]{5}$'
+      - name: code_departement
+        description: >
+          Département déduit du code postal (2 caractères, 2A/2B pour la Corse,
+          3 chiffres pour l'outre-mer). Approximation pour quelques communes.
+      - name: direction_regionale
+        description: Direction régionale Gares & Connexions (NULL si non renseignée).
+      - name: segmentation_drg
+        description: Catégorie de gare (A = nationale, B = régionale, C = locale).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['A', 'B', 'C']
+      - name: segmentation_marketing
+        description: Segment marketing (Hub, Ville, LGV, Proximité, IDF, Halte).
+      - name: taux_non_voyageurs
+        description: Taux de non-voyageurs fourni par la source (entre 0 et 1).
+        data_tests:
+          - positif_ou_nul
+      - name: source_fichier
+        description: Fichier source de la ligne Bronze retenue.
+      - name: date_ingestion
+        description: Date d'ingestion de la ligne Bronze retenue.
+
+  - name: slv_frequentation_annuelle
+    description: >
+      Fréquentation annuelle par gare (une ligne par gare et par année),
+      obtenue en passant en lignes les colonnes annuelles de la couche Bronze.
+    data_tests:
+      - combinaison_unique:
+          colonnes: [code_uic, annee]
+    columns:
+      - name: code_uic
+        description: Code UIC de la gare.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('slv_gares')
+                field: code_uic
+      - name: annee
+        description: Année de mesure.
+        data_tests:
+          - not_null
+      - name: nb_voyageurs
+        description: Nombre de voyageurs (montées + descentes) sur l'année.
+        data_tests:
+          - not_null
+          - positif_ou_nul
+      - name: nb_voyageurs_et_non_voyageurs
+        description: Voyageurs + non-voyageurs (personnes fréquentant la gare sans prendre le train).
+        data_tests:
+          - positif_ou_nul

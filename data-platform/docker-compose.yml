@@ -1,5 +1,82 @@
-
 name: Data-platform
+
+# ----------------------------------------------------------------
+# Configuration commune aux services Airflow
+# ----------------------------------------------------------------
+x-airflow-common: &airflow-common
+  # Image Airflow + venv du projet (pandas, trino, dbt) : voir airflow/Dockerfile
+  build:
+    context: ..
+    dockerfile: data-platform/airflow/Dockerfile
+  image: dlh-airflow:2.10.5
+  # Linux / VPS : mettre AIRFLOW_UID=$(id -u) dans .env pour que les
+  # fichiers écrits dans les dossiers montés appartiennent à ton compte.
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-admin}@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    # Utilisés par les tâches du DAG (ingest_bronze.py et dbt)
+    TRINO_HOST: trino
+    TRINO_PORT: "8080"
+    TRINO_CATALOG: iceberg
+    DBT_PROFILES_DIR: /opt/dlh/data-platform/dbt
+    # Artefacts dbt (manifest.json...) partagés avec openmetadata-ingest
+    DBT_TARGET_PATH: /opt/dlh/dbt-artifacts
+    DBT_LOG_PATH: /tmp/dbt/logs
+    DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    # Code du projet exécuté par le DAG
+    - ../extraction-data-api:/opt/dlh/extraction-data-api
+    - ./ingest_bronze.py:/opt/dlh/data-platform/ingest_bronze.py:ro
+    - ./dbt:/opt/dlh/data-platform/dbt:ro
+    - dbt_artifacts:/opt/dlh/dbt-artifacts
+
+# ----------------------------------------------------------------
+# Configuration commune aux services OpenMetadata
+# ----------------------------------------------------------------
+x-openmetadata-common: &openmetadata-common
+  image: docker.getcollate.io/openmetadata/server:2.0.7
+  profiles: ["gouvernance"]
+  depends_on:
+    postgres-init:
+      condition: service_completed_successfully
+    elasticsearch:
+      condition: service_healthy
+  environment:
+    OPENMETADATA_CLUSTER_NAME: datalakehouse
+    SERVER_PORT: "8585"
+    SERVER_ADMIN_PORT: "8586"
+    LOG_LEVEL: INFO
+    OPENMETADATA_HEAP_OPTS: ${OPENMETADATA_HEAP_OPTS:--Xmx1G -Xms1G}
+    # Base de données (Postgres partagé)
+    DB_DRIVER_CLASS: org.postgresql.Driver
+    DB_SCHEME: postgresql
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_USER: airflow
+    DB_USER_PASSWORD: ${AIRFLOW_DB_PASSWORD:-admin}
+    OM_DATABASE: openmetadata_db
+    DB_PARAMS: ""
+    # Moteur de recherche
+    SEARCH_TYPE: elasticsearch
+    ELASTICSEARCH_HOST: elasticsearch
+    ELASTICSEARCH_PORT: "9200"
+    ELASTICSEARCH_SCHEME: http
+    # Authentification intégrée (admin@open-metadata.org)
+    AUTHENTICATION_PROVIDER: basic
+    AUTHORIZER_ADMIN_PRINCIPALS: "[admin]"
+    AUTHORIZER_PRINCIPAL_DOMAIN: open-metadata.org
+    # Pas de second Airflow : l'ingestion passe par openmetadata-ingest
+    PIPELINE_SERVICE_CLIENT_ENABLED: "false"
+    SERVER_HOST_API_URL: http://openmetadata:8585/api
+    FERNET_KEY: ${OPENMETADATA_FERNET_KEY:-jJ/9sz0g0OHxsfxOoSfdFdmk3ysNmPRnH3TUAbz3IHA=}
 
 services:
   # --------------------------------------------------
@@ -7,7 +84,7 @@ services:
   # --------------------------------------------------
   rustfs:
     image: rustfs/rustfs:latest
-    container_name: rustfs
+    container_name: dlh-rustfs
     command: /data
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-admin}
@@ -34,7 +111,7 @@ services:
   # Création du bucket S3
   bucket-init:
     image: amazon/aws-cli:2.37.12
-    container_name: bucket-init
+    container_name: dlh-bucket-init
     depends_on:
       rustfs:
         condition: service_healthy
@@ -51,18 +128,79 @@ services:
     restart: "no"
 
   # --------------------------------------------------
+  # Bases PostgreSQL des services
+  # Idempotent : crée chaque base seulement si elle n'existe
+  # pas, y compris sur un volume postgres_data existant.
+  #   polaris          catalogue Iceberg (+ schéma polaris_schema)
+  #   metabase         métadonnées Metabase (profil "bi")
+  #   openmetadata_db  métadonnées OpenMetadata (profil "gouvernance")
+  # --------------------------------------------------
+  postgres-init:
+    image: postgres:16
+    container_name: dlh-postgres-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: airflow
+      PGPASSWORD: ${AIRFLOW_DB_PASSWORD:-admin}
+      PGDATABASE: airflow
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for db in polaris metabase openmetadata_db; do
+          psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1 \
+            || psql -c "CREATE DATABASE $$db"
+          echo "Base $$db prête."
+        done
+        psql -d polaris -c "CREATE SCHEMA IF NOT EXISTS polaris_schema"
+    restart: "no"
+
+  # --------------------------------------------------
+  # Bootstrap du realm Polaris (principal root + tables)
+  # Relançable : un realm déjà initialisé est ignoré
+  # (code retour 0).
+  # --------------------------------------------------
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:1.8.0
+    container_name: dlh-polaris-bootstrap
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    environment: &polaris-persistence
+      POLARIS_PERSISTENCE_TYPE: relational-jdbc
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/polaris
+      QUARKUS_DATASOURCE_USERNAME: airflow
+      QUARKUS_DATASOURCE_PASSWORD: ${AIRFLOW_DB_PASSWORD:-admin}
+    command:
+      - bootstrap
+      - --realm=POLARIS
+      - --credential=POLARIS,root,s3cr3t
+    restart: "no"
+
+  # --------------------------------------------------
   # Catalogue Iceberg REST
+  # Les métadonnées sont stockées dans PostgreSQL
+  # (base "polaris") : elles survivent aux redémarrages.
   # --------------------------------------------------
   polaris:
-    image: apache/polaris:latest
-    container_name: polaris
+    image: apache/polaris:1.8.0
+    container_name: dlh-polaris
     depends_on:
       rustfs:
         condition: service_healthy
       bucket-init:
         condition: service_completed_successfully
+      polaris-bootstrap:
+        condition: service_completed_successfully
     environment:
-      POLARIS_BOOTSTRAP_CREDENTIALS: "POLARIS,root,s3cr3t"
+      <<: *polaris-persistence
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_RETRIES: 5
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_INITIAL_DELAY_IN_MS: 100
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_DURATION_IN_MS: 5000
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-admin}
       AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-admin}
@@ -92,7 +230,7 @@ services:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-admin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-admin}
     image: trinodb/trino:476
-    container_name: trino
+    container_name: dlh-trino
     depends_on:
       polaris:
         condition: service_healthy
@@ -107,7 +245,7 @@ services:
   # --------------------------------------------------
   postgres:
     image: postgres:16
-    container_name: postgres
+    container_name: dlh-postgres
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-admin}
@@ -127,57 +265,46 @@ services:
   # Initialisation Airflow
   # --------------------------------------------------
   airflow-init:
-    image: apache/airflow:2.10.5
-    container_name: airflow-init
+    <<: *airflow-common
+    container_name: dlh-airflow-init
     depends_on:
       postgres:
         condition: service_healthy
-    environment: &airflow-environment
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
-        postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow_local_password}@postgres:5432/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ""
-      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
-      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
-      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./data:/opt/airflow/data
-      - ./src:/opt/airflow/src
     entrypoint: /bin/bash
+    # Relançable : si le compte existe déjà, il n'est pas recréé
+    # (son mot de passe n'est pas modifié). Toute autre erreur
+    # fait échouer l'init, et donc le démarrage d'Airflow.
     command:
       - -c
       - |
-        airflow db migrate &&
-        (airflow users create
-          --username "$$AIRFLOW_ADMIN_USER"
-          --password "$$AIRFLOW_ADMIN_PASSWORD"
-          --firstname Admin
-          --lastname 
-          --role Admin
-          --email admin@example.com || true)
+        set -euo pipefail
+        airflow db migrate
+        if airflow users list --output plain | awk 'NR>1 {print $$2}' | grep -qx "$$AIRFLOW_ADMIN_USER"; then
+          echo "Compte admin '$$AIRFLOW_ADMIN_USER' déjà présent."
+        else
+          airflow users create \
+            --username "$$AIRFLOW_ADMIN_USER" \
+            --password "$$AIRFLOW_ADMIN_PASSWORD" \
+            --firstname Admin \
+            --lastname User \
+            --role Admin \
+            --email admin@example.com
+          echo "Compte admin '$$AIRFLOW_ADMIN_USER' créé."
+        fi
     restart: "no"
 
   # --------------------------------------------------
   # Interface Airflow
   # --------------------------------------------------
   airflow-webserver:
-    image: apache/airflow:2.10.5
-    container_name: airflow-webserver
+    <<: *airflow-common
+    container_name: dlh-airflow-webserver
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-    environment: *airflow-environment
     command: webserver
     ports:
       - "8081:8080"
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./data:/opt/airflow/data
-      - ./src:/opt/airflow/src
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 15s
@@ -186,23 +313,145 @@ services:
     restart: unless-stopped
 
   # --------------------------------------------------
-  # Ordonnanceur Airflow
+  # Ordonnanceur Airflow (exécute aussi les tâches : LocalExecutor)
   # --------------------------------------------------
   airflow-scheduler:
-    image: apache/airflow:2.10.5
-    container_name: airflow-scheduler
+    <<: *airflow-common
+    container_name: dlh-airflow-scheduler
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-    environment: *airflow-environment
     command: scheduler
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./data:/opt/airflow/data
-      - ./src:/opt/airflow/src
     restart: unless-stopped
+
+  # ==================================================
+  # BI : Metabase (profil "bi")
+  #   docker compose --profile bi up -d
+  # ==================================================
+  metabase:
+    image: metabase/metabase:v0.65.3.3
+    container_name: dlh-metabase
+    profiles: ["bi"]
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_started
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: airflow
+      MB_DB_PASS: ${AIRFLOW_DB_PASSWORD:-admin}
+      MB_SITE_LOCALE: fr
+      MB_ANON_TRACKING_ENABLED: "false"
+      MB_CHECK_FOR_UPDATES: "false"
+      JAVA_TIMEZONE: Europe/Paris
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail -s http://localhost:3000/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
+  # Création du compte admin et de la connexion Trino (idempotent)
+  metabase-setup:
+    image: python:3.12-alpine
+    container_name: dlh-metabase-setup
+    profiles: ["bi"]
+    depends_on:
+      metabase:
+        condition: service_healthy
+    environment:
+      METABASE_URL: http://metabase:3000
+      METABASE_ADMIN_EMAIL: ${METABASE_ADMIN_EMAIL:-admin@datalakehouse.local}
+      METABASE_ADMIN_PASSWORD: ${METABASE_ADMIN_PASSWORD:-Lakehouse2026!}
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+      TRINO_CATALOG: iceberg
+      TRINO_SCHEMA: gold
+    volumes:
+      - ./metabase/setup_metabase.py:/setup_metabase.py:ro
+    command: ["python", "-u", "/setup_metabase.py"]
+    restart: "no"
+
+  # ==================================================
+  # Gouvernance : OpenMetadata (profil "gouvernance")
+  #   docker compose --profile gouvernance up -d
+  # ==================================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.0
+    container_name: dlh-elasticsearch
+    profiles: ["gouvernance"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  # Création / mise à jour du schéma de la base OpenMetadata
+  openmetadata-migrate:
+    <<: *openmetadata-common
+    container_name: dlh-openmetadata-migrate
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    restart: "no"
+
+  openmetadata:
+    <<: *openmetadata-common
+    container_name: dlh-openmetadata
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      elasticsearch:
+        condition: service_healthy
+      openmetadata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8585:8585"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8586/healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
+  # Ingestion des métadonnées (Trino + dbt) : à lancer à la demande
+  #   docker compose --profile gouvernance run --rm openmetadata-ingest
+  openmetadata-ingest:
+    image: docker.getcollate.io/openmetadata/ingestion:2.0.7
+    container_name: dlh-openmetadata-ingest
+    profiles: ["ingest-metadata"]
+    depends_on:
+      openmetadata:
+        condition: service_healthy
+    environment:
+      OPENMETADATA_URL: http://openmetadata:8585/api
+      OPENMETADATA_ADMIN_EMAIL: admin@open-metadata.org
+      OPENMETADATA_ADMIN_PASSWORD: ${OPENMETADATA_ADMIN_PASSWORD:-admin}
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+      TRINO_CATALOG: iceberg
+    volumes:
+      - ./openmetadata:/openmetadata:ro
+      - dbt_artifacts:/dbt-artifacts:ro
+      - ./dbt/target:/dbt-target-local:ro
+    entrypoint: ["python", "-u", "/openmetadata/ingest.py"]
+    restart: "no"
 
 volumes:
   rustfs_data:
   postgres_data:
+  elasticsearch_data:
+  dbt_artifacts:

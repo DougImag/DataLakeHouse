@@ -1,4 +1,12 @@
 .venv/*
 .obsidian/*
-*/__pycache__/
+__pycache__/
 data-platform/.env
+# dbt
+data-platform/dbt/target/
+data-platform/dbt/logs/
+data-platform/dbt/dbt_packages/
+data-platform/dbt/.user.yml
+# Logs Airflow : contenu ignoré, dossier conservé (doit exister avant le montage Docker)
+data-platform/airflow/logs/*
+!data-platform/airflow/logs/.gitkeep
