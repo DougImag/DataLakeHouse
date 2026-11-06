@@ -38,7 +38,8 @@ Le projet d'exemple utilise les données publiques de **fréquentation des gares
 ```
 DataLakeHouse/
 ├── extraction-data-api/        # Extraction des données SNCF (Python)
-│   ├── main.py                 # Télécharge le CSV brut puis produit un CSV/Parquet nettoyé
+│   ├── main.py                 # Fréquentation : télécharge le CSV brut puis produit un CSV/Parquet nettoyé
+│   ├── gares.py                # Référentiel des gares de voyageurs, avec leur position GPS
 │   ├── requirements.txt
 │   └── data/                   # Fichiers produits (raw / clean)
 ├── data-platform/              # Plateforme Docker
@@ -62,6 +63,7 @@ DataLakeHouse/
 
 ```
 API SNCF ──> extraction-data-api/main.py ──> data/frequentation_gares_raw.csv
+API SNCF ──> extraction-data-api/gares.py ─> data/gares_voyageurs_raw.csv (position GPS)
                                                      │
                                                      ▼
                                         data-platform/ingest_bronze.py
@@ -100,8 +102,9 @@ Pour qui connaît déjà Docker et dbt. Chaque commande est détaillée dans les
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r extraction-data-api/requirements.txt -r data-platform/dbt/requirements.txt pytest
 
-# Extraction (à lancer DEPUIS extraction-data-api/)
+# Extraction (main.py à lancer DEPUIS extraction-data-api/)
 (cd extraction-data-api && python main.py)
+python extraction-data-api/gares.py              # gares + position GPS
 
 # Plateforme
 cd data-platform
@@ -110,7 +113,8 @@ docker compose up -d --build                     # attendre que tout soit health
 set -a; eval "$(sed 's/\r$//' .env)"; set +a
 export DOCKER_NETWORK=$(docker inspect dlh-trino --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
 ./setup_lakehouse.sh                             # une seule fois
-python ingest_bronze.py                          # Bronze
+python ingest_bronze.py                          # Bronze : fréquentation
+python ingest_bronze.py ../extraction-data-api/data/gares_voyageurs_raw.csv --table gares_voyageurs
 (cd dbt && DBT_PROFILES_DIR=$PWD dbt build)      # Silver + Gold, avec les tests
 ```
 
@@ -175,6 +179,23 @@ Fichiers produits dans `extraction-data-api/data/` :
 
 - `frequentation_gares_raw.csv` : export brut de l'API, séparateur `;`, environ 3 000 gares. **C'est ce fichier qui alimente la couche Bronze.**
 - `frequentation_gares_clean.csv` et `.parquet` : version nettoyée, avec une ligne par gare et par année (environ 30 000 lignes). Colonnes : `nom_gare`, `code_uic`, `code_postal`, `direction_regionale`, `segmentation_drg`, `segmentation_marketing`, `indicateur_annee`, `voyageurs`, `annee`, `date_extraction_utc`. Il n'y a jamais deux lignes avec le même couple (`code_uic`, `annee`).
+
+### Position GPS des gares
+
+Le jeu de fréquentation ne contient pas de coordonnées. Elles viennent du référentiel [Gares de voyageurs](https://ressources.data.sncf.com/explore/dataset/gares-de-voyageurs/information/) (SNCF Gares & Connexions, licence **ODbL**, mis à jour chaque jour), récupéré par `gares.py`. Ce script construit son chemin de sortie à partir de son propre emplacement : il peut être lancé depuis n'importe quel dossier.
+
+```bash
+python extraction-data-api/gares.py
+```
+
+Il produit `extraction-data-api/data/gares_voyageurs_raw.csv` : l'export brut, séparateur `;`, environ 2 800 gares. Colonnes : `nom`, `libellecourt` (trigramme), `segment_drg`, `position_geographique`, `codeinsee`, `codes_uic`, `id`. Avant d'écrire le fichier, le script vérifie les colonnes, le nombre de gares (au moins 2 000) et que 95 % des gares au moins ont une position exploitable. Sinon, il s'arrête sans écraser le fichier précédent.
+
+Pièges de cet export, gérés dans dbt (étape 9) :
+
+- `position_geographique` est une seule chaîne `"<latitude>, <longitude>"`, avec **la latitude en premier** (l'inverse du GeoJSON) ;
+- `codes_uic` et `segment_drg` peuvent contenir plusieurs valeurs séparées par `;` (ex. `87271494;87001479`, `A;B`).
+
+Le lien avec la fréquentation se fait par le **code UIC**. Environ 92 % des gares de fréquentation figurent dans ce référentiel. Les autres (~230) n'ont pas de coordonnées : leur latitude et leur longitude valent `NULL`.
 
 ## 4. Configurer la plateforme
 
@@ -303,6 +324,14 @@ Par défaut, le script :
 - crée la table `iceberg.bronze.frequentation_sncf_v2` à partir des en-têtes du CSV, toutes colonnes en `VARCHAR`, plus `source_fichier` et `date_ingestion` ;
 - supprime les lignes déjà chargées depuis ce même fichier puis les réinsère. Il peut donc être relancé sans créer de doublons.
 
+Le référentiel des gares se charge avec le même script, dans sa propre table :
+
+```bash
+python ingest_bronze.py ../extraction-data-api/data/gares_voyageurs_raw.csv --table gares_voyageurs
+```
+
+Résultat : `iceberg.bronze.gares_voyageurs` (environ 2 800 lignes, tout en `VARCHAR`, comme la fréquentation).
+
 Options utiles :
 
 ```bash
@@ -325,13 +354,14 @@ dbt build                          # construit les modèles ET lance les tests
 cd ..
 ```
 
-Résultat : 5 tables et 32 tests. Un 6e modèle, `int_bronze_derniere_ingestion`, est éphémère : dbt l'intègre aux requêtes Silver sans créer de table. Il ne garde que la dernière ingestion de chaque gare.
+Résultat : 6 tables et 45 tests. Un 6e modèle, `int_bronze_derniere_ingestion`, est éphémère : dbt l'intègre aux requêtes Silver sans créer de table. Il ne garde que la dernière ingestion de chaque gare.
 
 | Couche | Table | Contenu |
 |---|---|---|
-| Silver | `iceberg.silver.slv_gares` | Référentiel des gares, une ligne par gare : colonnes typées, chaînes vides remplacées par `NULL`, code postal sur 5 chiffres, département |
+| Silver | `iceberg.silver.slv_gares_geolocalisation` | Position GPS des gares, une ligne par code UIC : `latitude` et `longitude` en `double`, code commune INSEE, segment DRG |
+| Silver | `iceberg.silver.slv_gares` | Référentiel des gares, une ligne par gare : colonnes typées, chaînes vides remplacées par `NULL`, code postal sur 5 chiffres, département, **latitude, longitude, code commune** |
 | Silver | `iceberg.silver.slv_frequentation_annuelle` | Une ligne par gare et par année (colonnes annuelles passées en lignes, nombres en `bigint`) |
-| Gold | `iceberg.gold.gld_frequentation_gares` | Mart principal du dashboard : gare × année, évolution sur un an, rang national, part nationale |
+| Gold | `iceberg.gold.gld_frequentation_gares` | Mart principal du dashboard : gare × année, évolution sur un an, rang national, part nationale, **latitude, longitude** |
 | Gold | `iceberg.gold.gld_frequentation_regions` | Agrégat par direction régionale et par année |
 | Gold | `iceberg.gold.gld_kpi_national` | KPI nationaux par année, dont l'écart avec 2019 (année pré-Covid) |
 
@@ -391,13 +421,17 @@ Les fichiers Parquet et les métadonnées Iceberg sont visibles dans RustFS, sou
 Le DAG `sncf_lakehouse_medallion` (`data-platform/airflow/dags/sncf_lakehouse.py`) automatise les étapes 3, 8 et 9 :
 
 ```
-extract_sncf_frequentation >> load_bronze >> transform_silver_with_dbt >> build_gold_marts
+extract_sncf_frequentation >> load_bronze ───────┐
+                                                 ├──> transform_silver_with_dbt >> build_gold_marts
+extract_gares_voyageurs >> load_bronze_gares ────┘
 ```
 
 | Tâche | Commande exécutée dans le conteneur | Équivalent manuel |
 |---|---|---|
 | `extract_sncf_frequentation` | `python main.py` (dans `extraction-data-api/`) | étape 3 |
 | `load_bronze` | `python ingest_bronze.py …/frequentation_gares_raw.csv` | étape 8 |
+| `extract_gares_voyageurs` | `python gares.py` | étape 3 |
+| `load_bronze_gares` | `python ingest_bronze.py …/gares_voyageurs_raw.csv --table gares_voyageurs` | étape 8 |
 | `transform_silver_with_dbt` | `dbt build --select source:bronze silver` | étape 9 |
 | `build_gold_marts` | `dbt build --select gold` | étape 9 |
 
@@ -456,6 +490,65 @@ Idées pour un premier dashboard :
 | Top 20 des gares | `gld_frequentation_gares` | filtre sur l'année, tri par `rang_national` |
 | Répartition par région | `gld_frequentation_regions` | barres, `part_nationale_pct` |
 | Carte par département | `gld_frequentation_gares` | `code_departement`, somme de `nb_voyageurs` |
+| Carte des gares (points) | `gld_frequentation_gares` | filtre sur l'année, visualisation *Carte → Épingles*, colonnes `latitude` / `longitude`, taille selon `nb_voyageurs` |
+| Carte de la fréquentation par ville | `gld_frequentation_gares` | requête SQL ci-dessous |
+
+### Exemple : carte de la fréquentation par ville
+
+Cette question affiche, pour la dernière année disponible, la somme des voyageurs de chaque ville, placée sur une carte.
+
+1. *Nouveau → Requête SQL*, base **Lakehouse (Trino)**, colle la requête ci-dessous, puis ▶ ;
+2. *Visualisation → Carte*, type **Épingles**, avec `latitude` et `longitude` comme coordonnées ;
+3. enregistre la question, puis ajoute-la à un tableau de bord.
+
+```sql
+WITH gares AS (
+    SELECT
+        -- Paris, Lyon et Marseille sont découpées en arrondissements : on les regroupe
+        CASE
+            WHEN code_commune LIKE '751%' THEN '75056'
+            WHEN code_commune BETWEEN '69381' AND '69389' THEN '69123'
+            WHEN code_commune BETWEEN '13201' AND '13216' THEN '13055'
+            ELSE code_commune
+        END AS code_commune,
+        nom_gare,
+        nb_voyageurs,
+        latitude,
+        longitude
+    FROM iceberg.gold.gld_frequentation_gares
+    WHERE annee = (SELECT max(annee) FROM iceberg.gold.gld_frequentation_gares)
+      AND latitude IS NOT NULL
+)
+SELECT
+    code_commune,
+    -- Nom affiché : la gare la plus fréquentée de la ville
+    max_by(nom_gare, nb_voyageurs)                                  AS ville,
+    count(*)                                                        AS nb_gares,
+    sum(nb_voyageurs)                                               AS nb_voyageurs,
+    -- Coordonnées de la ville : barycentre des gares, pondéré par la fréquentation
+    -- (moyenne simple si toutes les gares de la ville ont 0 voyageur)
+    round(coalesce(sum(latitude * nb_voyageurs)  / nullif(sum(nb_voyageurs), 0), avg(latitude)), 6)  AS latitude,
+    round(coalesce(sum(longitude * nb_voyageurs) / nullif(sum(nb_voyageurs), 0), avg(longitude)), 6) AS longitude
+FROM gares
+GROUP BY code_commune
+ORDER BY nb_voyageurs DESC
+```
+
+Résultat (environ 2 460 villes pour 2024) :
+
+| code_commune | ville | nb_gares | nb_voyageurs | latitude | longitude |
+|---|---|---|---|---|---|
+| 75056 | Paris Gare du Nord | 27 | 830 357 575 | 48.86661 | 2.346914 |
+| 93066 | Saint-Denis | 3 | 59 625 499 | 48.928908 | 2.350702 |
+| 69123 | Lyon Part Dieu | 6 | 55 563 984 | 45.758941 | 4.851264 |
+
+Limites de cet exemple :
+
+- les données ne contiennent pas le nom des villes, seulement leur code INSEE (`code_commune`) : la colonne `ville` affiche le nom de la gare la plus fréquentée de la commune ;
+- les coordonnées de la ville sont celles du barycentre de ses gares, pondéré par la fréquentation, pas celles du centre officiel de la commune ;
+- les gares sans position GPS (environ 8 %, voir l'étape 3) sont exclues, leur fréquentation n'est donc pas comptée.
+
+> Si les colonnes `latitude` / `longitude` n'apparaissent pas dans Metabase après une mise à jour des modèles dbt : *Admin → Bases de données → Lakehouse (Trino) → Synchroniser le schéma*.
 
 Les questions et dashboards sont enregistrés dans la base Postgres `metabase` : ils survivent aux redémarrages.
 
@@ -481,13 +574,13 @@ Le script `openmetadata/ingest.py` :
 
 1. récupère le jeton du compte de service `ingestion-bot` ;
 2. **ingère Trino :** il crée le service `lakehouse_trino` et importe les schémas `bronze`, `silver` et `gold`, avec leurs tables et colonnes ;
-3. **ingère dbt :** il importe les descriptions des modèles et des colonnes, les 32 tests et le **lignage** `bronze.frequentation_sncf_v2 → silver.* → gold.*`. Il prend le `manifest.json` le plus récent entre celui produit par le DAG Airflow (volume `dbt_artifacts`) et celui d'un `dbt build` lancé à la main (`dbt/target/`).
+3. **ingère dbt :** il importe les descriptions des modèles et des colonnes, les 45 tests et le **lignage** `bronze.frequentation_sncf_v2` / `bronze.gares_voyageurs → silver.* → gold.*`. Il prend le `manifest.json` le plus récent entre celui produit par le DAG Airflow (volume `dbt_artifacts`) et celui d'un `dbt build` lancé à la main (`dbt/target/`).
 
 Tu peux le relancer après chaque modification des modèles dbt : OpenMetadata met à jour les entités existantes.
 
 Ouvre http://localhost:8585 (`admin@open-metadata.org` / `admin`) :
 
-- *Explore → Tables* : les 6 tables, avec leurs descriptions et colonnes ;
+- *Explore → Tables* : les 8 tables, avec leurs descriptions et colonnes ;
 - onglet *Lineage* d'une table Gold : la chaîne Bronze → Silver → Gold ;
 - onglet *Data Observability* : les tests dbt et leur dernier résultat.
 

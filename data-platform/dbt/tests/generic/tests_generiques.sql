@@ -25,3 +25,11 @@
     where {{ column_name }} is not null
       and not regexp_like({{ column_name }}, '{{ regex }}')
 {% endtest %}
+
+{# Valeurs comprises entre min et max inclus (les NULL sont ignorés) #}
+{% test compris_entre(model, column_name, min, max) %}
+    select {{ column_name }}
+    from {{ model }}
+    where {{ column_name }} < {{ min }}
+       or {{ column_name }} > {{ max }}
+{% endtest %}

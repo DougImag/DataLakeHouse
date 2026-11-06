@@ -5,6 +5,10 @@ Pipeline médaillon des données SNCF de fréquentation des gares.
             │
     load_bronze                  CSV brut -> iceberg.bronze.frequentation_sncf_v2
             │
+            │   extract_gares_voyageurs   référentiel des gares (position GPS)
+            │           │
+            │   load_bronze_gares         CSV brut -> iceberg.bronze.gares_voyageurs
+            │           │
     transform_silver_with_dbt    dbt build --select source:bronze silver (tests + modèles)
             │
     build_gold_marts             dbt build --select gold   (modèles + tests)
@@ -27,6 +31,7 @@ PROJECT_DIR = "/opt/dlh"
 VENV_BIN = "/opt/dlh-venv/bin"
 EXTRACTION_DIR = f"{PROJECT_DIR}/extraction-data-api"
 RAW_CSV = f"{EXTRACTION_DIR}/data/frequentation_gares_raw.csv"
+GARES_RAW_CSV = f"{EXTRACTION_DIR}/data/gares_voyageurs_raw.csv"
 DBT_DIR = f"{PROJECT_DIR}/data-platform/dbt"
 
 default_args = {
@@ -62,9 +67,26 @@ with DAG(
         execution_timeout=timedelta(minutes=20),
     )
 
+    extract_gares = BashOperator(
+        task_id="extract_gares_voyageurs",
+        doc_md="Télécharge le référentiel SNCF des gares de voyageurs (position GPS) dans extraction-data-api/data/.",
+        bash_command=f"{VENV_BIN}/python {EXTRACTION_DIR}/gares.py",
+        execution_timeout=timedelta(minutes=10),
+    )
+
+    load_bronze_gares = BashOperator(
+        task_id="load_bronze_gares",
+        doc_md="Charge le référentiel des gares dans iceberg.bronze.gares_voyageurs (remplace les lignes du même fichier).",
+        bash_command=(
+            f"{VENV_BIN}/python {PROJECT_DIR}/data-platform/ingest_bronze.py "
+            f"{GARES_RAW_CSV} --table gares_voyageurs"
+        ),
+        execution_timeout=timedelta(minutes=20),
+    )
+
     transform_silver = BashOperator(
         task_id="transform_silver_with_dbt",
-        doc_md="Teste la source Bronze, puis construit et teste les modèles Silver (slv_gares, slv_frequentation_annuelle).",
+        doc_md="Teste les sources Bronze, puis construit et teste les modèles Silver (slv_gares_geolocalisation, slv_gares, slv_frequentation_annuelle).",
         bash_command=f"cd {DBT_DIR} && {VENV_BIN}/dbt build --select source:bronze silver",
         execution_timeout=timedelta(minutes=20),
     )
@@ -77,3 +99,4 @@ with DAG(
     )
 
     extract >> load_bronze >> transform_silver >> build_gold
+    extract_gares >> load_bronze_gares >> transform_silver

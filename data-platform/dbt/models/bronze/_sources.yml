@@ -25,3 +25,34 @@ sources:
             description: Nom du fichier CSV ingéré (colonne technique).
           - name: date_ingestion
             description: Horodatage UTC de l'ingestion (colonne technique).
+
+      - name: gares_voyageurs
+        description: >
+          Export brut du jeu de données SNCF « Gares de voyageurs »
+          (ressources.data.sncf.com, licence ODbL) : une ligne par gare, avec sa
+          position GPS. Chargé depuis extraction-data-api/data/gares_voyageurs_raw.csv.
+        columns:
+          - name: id
+            description: Identifiant unique de la gare (UUID).
+            data_tests:
+              - not_null
+          - name: nom
+            description: Nom de la gare.
+          - name: libellecourt
+            description: Trigramme de la gare.
+          - name: segment_drg
+            description: Segment(s) DRG, séparés par ";" si plusieurs.
+          - name: position_geographique
+            description: >
+              Position "<latitude>, <longitude>" en WGS84 - attention, la
+              latitude vient EN PREMIER (format geo_point_2d d'Opendatasoft).
+            data_tests:
+              - not_null
+          - name: codeinsee
+            description: Code INSEE de la commune (5 caractères, 2A/2B pour la Corse).
+          - name: codes_uic
+            description: Code(s) UIC de la gare (8 chiffres), séparés par ";" si plusieurs.
+          - name: source_fichier
+            description: Nom du fichier CSV ingéré (colonne technique).
+          - name: date_ingestion
+            description: Horodatage UTC de l'ingestion (colonne technique).

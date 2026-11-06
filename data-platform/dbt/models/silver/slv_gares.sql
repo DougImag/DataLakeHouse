@@ -8,6 +8,13 @@ with source as (
 
 ),
 
+geolocalisation as (
+
+    select code_uic, latitude, longitude, code_commune
+    from {{ ref('slv_gares_geolocalisation') }}
+
+),
+
 nettoyage as (
 
     select
@@ -26,7 +33,7 @@ nettoyage as (
 )
 
 select
-    code_uic,
+    nettoyage.code_uic,
     nom_gare,
     code_postal,
     -- Département déduit du code postal (approximation : quelques communes
@@ -41,6 +48,13 @@ select
     segmentation_drg,
     segmentation_marketing,
     taux_non_voyageurs,
+    -- Position GPS (référentiel « Gares de voyageurs ») : NULL pour les
+    -- gares absentes de ce référentiel (~8 %).
+    geo.latitude,
+    geo.longitude,
+    geo.code_commune,
     source_fichier,
     date_ingestion
 from nettoyage
+left join geolocalisation as geo
+    on geo.code_uic = nettoyage.code_uic

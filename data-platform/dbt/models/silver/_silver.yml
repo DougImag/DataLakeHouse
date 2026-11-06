@@ -43,6 +43,20 @@ models:
         description: Taux de non-voyageurs fourni par la source (entre 0 et 1).
         data_tests:
           - positif_ou_nul
+      - name: latitude
+        description: Latitude WGS84 (référentiel « Gares de voyageurs »), NULL si la gare n'y figure pas.
+        data_tests:
+          - compris_entre:
+              min: -90
+              max: 90
+      - name: longitude
+        description: Longitude WGS84, NULL si la gare n'y figure pas.
+        data_tests:
+          - compris_entre:
+              min: -180
+              max: 180
+      - name: code_commune
+        description: Code INSEE de la commune de la gare (NULL si absente du référentiel).
       - name: source_fichier
         description: Fichier source de la ligne Bronze retenue.
       - name: date_ingestion
@@ -77,3 +91,56 @@ models:
         description: Voyageurs + non-voyageurs (personnes fréquentant la gare sans prendre le train).
         data_tests:
           - positif_ou_nul
+
+  - name: slv_gares_geolocalisation
+    description: >
+      Position GPS des gares de voyageurs (référentiel SNCF « Gares de
+      voyageurs »), une ligne par code UIC. Une gare avec plusieurs codes UIC
+      apparaît sur plusieurs lignes, avec la même position.
+    data_tests:
+      - combinaison_unique:
+          colonnes: [code_uic]
+    columns:
+      - name: code_uic
+        description: Code UIC (8 chiffres), clé de jointure avec slv_gares.
+        data_tests:
+          - not_null
+          - format_regex:
+              regex: '^[0-9]{8}$'
+      - name: id_gare
+        description: Identifiant de la gare dans le référentiel (UUID).
+        data_tests:
+          - not_null
+      - name: nom_gare
+        description: Nom de la gare dans le référentiel.
+      - name: trigramme
+        description: Trigramme de la gare.
+      - name: latitude
+        description: >
+          Latitude WGS84. La plage testée couvre la France métropolitaine et
+          les pays voisins desservis : une inversion latitude / longitude
+          ferait échouer le test.
+        data_tests:
+          - not_null
+          - compris_entre:
+              min: 41
+              max: 52
+      - name: longitude
+        description: Longitude WGS84.
+        data_tests:
+          - not_null
+          - compris_entre:
+              min: -6
+              max: 10
+      - name: code_commune
+        description: Code INSEE de la commune.
+      - name: segment_drg
+        description: Segment DRG le plus élevé de la gare (A = nationale, B = régionale, C = locale).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['A', 'B', 'C']
+      - name: source_fichier
+        description: Fichier source de la ligne Bronze.
+      - name: date_ingestion
+        description: Date d'ingestion de la ligne Bronze.

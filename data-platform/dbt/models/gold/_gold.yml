@@ -21,6 +21,12 @@ models:
         description: Code postal sur 5 chiffres.
       - name: code_departement
         description: Département déduit du code postal.
+      - name: code_commune
+        description: Code INSEE de la commune (NULL si la gare n'a pas de position connue).
+      - name: latitude
+        description: Latitude WGS84 de la gare, pour les cartes (NULL si inconnue).
+      - name: longitude
+        description: Longitude WGS84 de la gare (NULL si inconnue).
       - name: direction_regionale
         description: Direction régionale Gares & Connexions.
         data_tests:

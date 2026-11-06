@@ -10,7 +10,12 @@ bronze.frequentation_sncf_v2                     (source, chargée par ingest_br
         ▼
 int_bronze_derniere_ingestion                    (éphémère : dernière ingestion par gare)
         │
-        ├──> silver.slv_gares                    (1 ligne / gare)
+        │   bronze.gares_voyageurs               (source : référentiel des gares, position GPS)
+        │           │
+        │           ▼
+        │   silver.slv_gares_geolocalisation     (1 ligne / code UIC : latitude, longitude)
+        │           │  (jointure sur code_uic)
+        ├──> silver.slv_gares ◄┘                 (1 ligne / gare, avec latitude / longitude)
         └──> silver.slv_frequentation_annuelle   (1 ligne / gare × année)
                         │
                         ▼
@@ -59,7 +64,7 @@ La connexion est définie dans `profiles.yml`. Elle peut être modifiée par des
 
 ## Tests
 
-`dbt build` lance 32 tests. Si un test échoue, les modèles qui en dépendent ne sont pas construits.
+`dbt build` lance 45 tests. Si un test échoue, les modèles qui en dépendent ne sont pas construits.
 
 | Test | Où |
 |---|---|
@@ -67,6 +72,7 @@ La connexion est définie dans `profiles.yml`. Elle peut être modifiée par des
 | `combinaison_unique` | unicité de (`code_uic`, `annee`), de (`direction_regionale`, `annee`)… |
 | `positif_ou_nul` | nombres de voyageurs, taux |
 | `format_regex` | code UIC sur 8 chiffres, code postal sur 5 chiffres |
+| `compris_entre` | latitude / longitude : plage France métropolitaine dans `slv_gares_geolocalisation` (détecte une inversion lat/lon), plage WGS84 dans `slv_gares` |
 
 Les tests génériques du projet sont définis dans `tests/generic/tests_generiques.sql`.
 
