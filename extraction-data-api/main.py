@@ -53,7 +53,12 @@ def transform_data(content):
     from io import BytesIO
 
     # Le portail peut fournir des caractères accentués.
-    df = pd.read_csv(BytesIO(content), sep=";", encoding="utf-8-sig")
+    # Tout est lu en texte : les identifiants (code postal, code UIC)
+    # ne doivent pas être convertis en nombres. Les colonnes de
+    # fréquentation sont converties explicitement plus bas.
+    df = pd.read_csv(
+        BytesIO(content), sep=";", encoding="utf-8-sig", dtype=str
+    )
 
     # Normaliser les noms des colonnes.
     df.columns = (
@@ -82,22 +87,38 @@ def transform_data(content):
 
     print("Colonnes annuelles détectées :", year_columns)
 
-    if not year_columns:
-        raise ValueError(
-            "Aucune colonne annuelle trouvée. "
-            "Vérifie le séparateur et le schéma source."
-        )
-
-    # Les noms des colonnes descriptives peuvent évoluer.
+    # Les noms des colonnes descriptives peuvent évoluer :
+    # l'export actuel est en snake_case (ex. "code_uic_complet"),
+    # les anciens exports utilisaient des libellés (ex. "code uic").
     rename_map = {
         "nom de la gare": "nom_gare",
         "code uic": "code_uic",
+        "code_uic_complet": "code_uic",
         "code postal": "code_postal",
         "direction régionale gares": "direction_regionale",
+        "direction_regionale_gares": "direction_regionale",
         "segmentation drg": "segmentation_drg",
         "segmentation marketing": "segmentation_marketing",
     }
     df = df.rename(columns=rename_map)
+
+    # La clé de déduplication (code_uic, annee) est indispensable :
+    # sans code_uic, on ne garderait qu'une ligne par année.
+    if "code_uic" not in df.columns:
+        raise ValueError(
+            "Colonne code UIC introuvable. "
+            f"Colonnes disponibles : {df.columns.tolist()}"
+        )
+
+    # La source fournit certains codes postaux sans le zéro initial
+    # (ex. "1500" pour 01500) : on les complète à 5 chiffres.
+    if "code_postal" in df.columns:
+        df["code_postal"] = (
+            df["code_postal"]
+            .str.strip()
+            .str.replace(r"\.0$", "", regex=True)
+            .str.zfill(5)
+        )
 
     # Ne garder que les colonnes utiles présentes dans le fichier.
     dimensions = [
@@ -157,12 +178,7 @@ def transform_data(content):
     if (long_df["voyageurs"] < 0).any():
         raise ValueError("Des valeurs négatives ont été détectées.")
 
-    long_df = long_df.drop_duplicates(
-        subset=[
-            col for col in ["code_uic", "annee"]
-            if col in long_df.columns
-        ]
-    )
+    long_df = long_df.drop_duplicates(subset=["code_uic", "annee"])
 
     return long_df
 
@@ -201,3 +217,4 @@ if __name__ == "__main__":
     print(clean_df.head(10).to_string(index=False))
 
     print("\nPipeline terminé.")
+

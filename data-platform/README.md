@@ -1,60 +1,61 @@
-# SNCF Lakehouse starter (Docker Compose)
+# data-platform
 
-Local development scaffold for:
-- Trino (SQL query engine)
-- MinIO (S3-compatible object storage)
-- Apache Polaris (Iceberg REST catalog)
-- Apache Iceberg (table format; **not a separate container**)
-- Python / dbt (ingestion and transformations)
-- Apache Airflow (orchestration)
-- Medallion layers: Bronze / Silver / Gold
+Plateforme Docker Compose du lakehouse SNCF : stockage, catalogue, moteur SQL, transformations, orchestration, BI et gouvernance.
 
-## Start
+> La procédure complète d'installation (étapes 0 à 17) et le dépannage sont décrits dans le [README à la racine du dépôt](../README.md).
 
-1. Install Docker Desktop with Docker Compose v2.
-2. Copy `.env.example` to `.env`.
-3. From this folder run:
+## Services
 
-   ```bash
-   docker compose up -d
-   docker compose ps
-   ```
+| Service | Rôle | Port | Profil |
+|---|---|---|---|
+| `rustfs` | Stockage objet compatible S3 (bucket `lakehouse`, créé par `bucket-init`) | 9000 / 9001 | — |
+| `postgres` | Bases `airflow`, `polaris`, `metabase`, `openmetadata_db` (créées par `postgres-init`) | 5433 | — |
+| `polaris` | Catalogue Iceberg REST, métadonnées dans Postgres (realm initialisé par `polaris-bootstrap`) | 8181 / 8182 | — |
+| `trino` | Moteur SQL, catalogue `iceberg` (`trino/catalog/iceberg.properties`) | 8080 | — |
+| `airflow-webserver`, `airflow-scheduler` | Orchestration (image `dlh-airflow`, avec dbt : `airflow/Dockerfile`) | 8081 | — |
+| `metabase` (+ `metabase-setup`) | Dashboards sur `iceberg.gold` | 3000 | `bi` |
+| `openmetadata` (+ `elasticsearch`, `openmetadata-migrate`) | Catalogue, lignage, tests dbt | 8585 | `gouvernance` |
+| `openmetadata-ingest` | Import des métadonnées Trino + dbt, à lancer à la demande | — | `ingest-metadata` |
 
-4. Open:
-   - MinIO Console: http://localhost:9001
-   - Trino UI: http://localhost:8080
-   - Airflow UI: http://localhost:8081 (user/password from `.env`, defaults admin/admin)
-   - Polaris API: http://localhost:8181
+Iceberg n'est pas un conteneur : c'est le format des tables, géré par Trino et Polaris.
 
-## Important setup notes
+## Contenu du dossier
 
-This is a **development scaffold**, not a production-secure deployment.
-Polaris bootstrap variables and REST/OAuth settings can vary by Polaris image/version. Verify the Polaris startup logs and create a catalog named `sncf` with an S3 storage configuration pointing internally to `http://minio:9000`, path-style access enabled, and warehouse location `s3://warehouse/`. The Trino catalog file expects a Polaris catalog named `sncf` and a client credential `root:secret`; update it to match the principal/client created in Polaris. If your Polaris build does not support the bootstrap variable shown in `.env.example`, use the official Apache Polaris quickstart bootstrap procedure for that image.
+| Fichier / dossier | Rôle |
+|---|---|
+| `docker-compose.yml` | Définition de tous les services |
+| `.env.example` | Modèle du `.env` (identifiants, profils, paramètres des scripts) |
+| `setup_lakehouse.sh` | Crée le catalogue Polaris `lakehouse` et le schéma `iceberg.bronze` (une seule fois) |
+| `ingest_bronze.py` | Charge un CSV brut dans `iceberg.bronze` : fréquentation (`frequentation_sncf_v2`, par défaut) ou gares avec position GPS (`--table gares_voyageurs`) |
+| `reset_bronze.sh` | ⚠️ Supprime puis recrée la couche Bronze |
+| `polaris-token.sh` | Récupère un jeton OAuth Polaris (debug) |
+| `trino/catalog/` | Connexion Trino → Polaris / RustFS |
+| `airflow/` | Image Airflow du projet et DAG `sncf_lakehouse_medallion` |
+| `dbt/` | Projet dbt-trino : couches Silver et Gold ([README](dbt/README.md)) |
+| `metabase/` | Initialisation de Metabase (compte admin, connexion Trino) |
+| `openmetadata/` | Script d'ingestion des métadonnées dans OpenMetadata |
 
-For durable catalog metadata, configure Polaris with a PostgreSQL/JDBC metastore. The included Postgres service is currently used by Airflow and is **not automatically configured as Polaris's metastore**.
+## Couches médaillon
 
-The Trino connector configuration may need adjustment to match the exact Trino/Polaris versions and the chosen Polaris credential-vending setup. Keep the Polaris and Trino configuration aligned. Do not use the default passwords outside a local sandbox.
+Toutes les tables sont dans le catalogue Iceberg `lakehouse`, stockées dans le bucket RustFS `lakehouse` :
 
-## Medallion layout
+| Couche | Schéma Trino | Emplacement | Alimentée par |
+|---|---|---|---|
+| Bronze | `iceberg.bronze` | `s3://lakehouse/bronze/` | `ingest_bronze.py` |
+| Silver | `iceberg.silver` | `s3://lakehouse/silver/` | dbt (`dbt/models/silver/`) |
+| Gold | `iceberg.gold` | `s3://lakehouse/gold/` | dbt (`dbt/models/gold/`) |
 
-Suggested object-store paths:
-- `s3://bronze/sncf/frequentation/ingestion_date=YYYY-MM-DD/` — original source files
-- `s3://warehouse/silver/` — normalized Iceberg tables
-- `s3://warehouse/gold/` — business marts for dashboards
+## Démarrage rapide
 
-The `minio-init` service creates buckets `warehouse`, `bronze`, `silver`, and `gold`.
-The Iceberg catalog's `warehouse` location is configured in Polaris; it is not the same thing as the MinIO bucket itself.
+```bash
+cp .env.example .env
+docker compose up -d --build                  # + --profile bi / --profile gouvernance si besoin
+set -a; eval "$(sed 's/\r$//' .env)"; set +a
+export DOCKER_NETWORK=$(docker inspect dlh-trino --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+./setup_lakehouse.sh
+python ingest_bronze.py
+python ingest_bronze.py ../extraction-data-api/data/gares_voyageurs_raw.csv --table gares_voyageurs
+(cd dbt && DBT_PROFILES_DIR=$PWD dbt build)
+```
 
-## Add Python and dbt
-
-- Put ingestion scripts in `python/`.
-- Put the dbt project in `dbt/`.
-- Replace the example Airflow DAG's echo commands with your real commands.
-- For dbt with Trino, add `dbt-trino` to an image/environment that has dbt installed. The base Airflow image does not include dbt by default.
-
-## Troubleshooting
-
-- `docker compose config` validates Compose syntax.
-- `docker compose logs -f polaris trino` shows catalog startup and connectivity problems.
-- `docker compose logs -f airflow airflow-init` shows Airflow initialization errors.
-- Check that Trino can resolve Docker service names (`polaris`, `minio`) from inside the Compose network.
+Environnement de développement local : change tous les mots de passe avant un déploiement sur serveur.

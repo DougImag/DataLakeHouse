@@ -14,9 +14,28 @@ RUSTFS_ACCESS_KEY="${RUSTFS_ACCESS_KEY:?exporte RUSTFS_ACCESS_KEY}"
 RUSTFS_SECRET_KEY="${RUSTFS_SECRET_KEY:?exporte RUSTFS_SECRET_KEY}"
 DOCKER_NETWORK="${DOCKER_NETWORK:?exporte DOCKER_NETWORK (docker network ls)}"
 
-TRINO_CONTAINER="${TRINO_CONTAINER:-trino}"
-TRINO_PROPS="${TRINO_PROPS:-./etc/catalog/iceberg.properties}"   # chemin local du fichier
+TRINO_CONTAINER="${TRINO_CONTAINER:-dlh-trino}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TRINO_PROPS="${TRINO_PROPS:-$SCRIPT_DIR/trino/catalog/iceberg.properties}"   # chemin local du fichier
 # ---------------------------------------------------------
+
+# Remplace (ou ajoute) une ligne "cle=valeur" dans un fichier .properties.
+# Portable GNU sed (Linux, Git Bash) et BSD sed (macOS) : pas de "sed -i",
+# dont la syntaxe diffère. Le contenu est réécrit dans le même fichier
+# (cat >), ce qui conserve ses droits.
+set_property() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp)"
+  if grep -q "^${key}=" "$file"; then
+    sed "s|^${key}=.*|${key}=${value}|" "$file" > "$tmp"
+  else
+    cat "$file" > "$tmp"
+    [ -z "$(tail -c1 "$file")" ] || echo >> "$tmp"   # fin de ligne manquante
+    echo "${key}=${value}" >> "$tmp"
+  fi
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
 
 API="$POLARIS_URL/api/management/v1"
 
@@ -75,7 +94,8 @@ curl -sf -X PUT "$API/principal-roles/service_admin/catalog-roles/$CATALOG" "${A
 
 echo "==> 6. Trino : désactiver le vending de credentials (RustFS n'a pas de STS)"
 if [ -f "$TRINO_PROPS" ]; then
-  sed -i 's/^iceberg.rest-catalog.vended-credentials-enabled=.*/iceberg.rest-catalog.vended-credentials-enabled=false/' "$TRINO_PROPS"
+  set_property "$TRINO_PROPS" "iceberg.rest-catalog.vended-credentials-enabled" "false"
+  echo "    $TRINO_PROPS : $(grep '^iceberg.rest-catalog.vended-credentials-enabled=' "$TRINO_PROPS")"
 else
   echo "    $TRINO_PROPS introuvable : modifie la ligne à la main"
 fi
