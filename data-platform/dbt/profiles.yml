@@ -1,0 +1,19 @@
+# Profil de connexion dbt -> Trino -> catalogue Iceberg (Polaris).
+# Les valeurs par défaut correspondent à la stack docker compose locale ;
+# elles peuvent être surchargées par des variables d'environnement
+# (mêmes noms que pour ingest_bronze.py).
+sncf_lakehouse:
+  target: local
+  outputs:
+    local:
+      type: trino
+      method: none                      # Trino local sans authentification
+      host: "{{ env_var('TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | int }}"
+      user: "{{ env_var('DBT_TRINO_USER', 'dbt') }}"
+      database: "{{ env_var('TRINO_CATALOG', 'iceberg') }}"
+      schema: silver                    # schéma par défaut (voir generate_schema_name)
+      http_scheme: http
+      threads: "{{ env_var('DBT_THREADS', '4') | int }}"
+      session_properties:
+        query_max_run_time: 30m

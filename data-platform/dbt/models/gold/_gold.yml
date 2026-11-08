@@ -1,0 +1,117 @@
+version: 2
+
+models:
+  - name: gld_frequentation_gares
+    description: >
+      Mart principal du dashboard : une ligne par gare et par année, avec les
+      attributs de la gare, l'évolution sur un an et le classement national.
+      Les dimensions non renseignées valent « Non renseignée ».
+    data_tests:
+      - combinaison_unique:
+          arguments:
+            colonnes: [code_uic, annee]
+    columns:
+      - name: code_uic
+        description: Code UIC de la gare.
+        data_tests:
+          - not_null
+      - name: nom_gare
+        description: Nom de la gare.
+      - name: code_postal
+        description: Code postal sur 5 chiffres.
+      - name: code_departement
+        description: Département déduit du code postal.
+      - name: code_commune
+        description: Code INSEE de la commune (NULL si la gare n'a pas de position connue).
+      - name: latitude
+        description: Latitude WGS84 de la gare, pour les cartes (NULL si inconnue).
+      - name: longitude
+        description: Longitude WGS84 de la gare (NULL si inconnue).
+      - name: direction_regionale
+        description: Direction régionale Gares & Connexions.
+        data_tests:
+          - not_null
+      - name: segmentation_drg
+        description: Catégorie de gare (A, B, C ou « Non renseignée »).
+        data_tests:
+          - not_null
+      - name: segmentation_marketing
+        description: Segment marketing de la gare.
+        data_tests:
+          - not_null
+      - name: annee
+        description: Année de mesure.
+        data_tests:
+          - not_null
+      - name: nb_voyageurs
+        description: Nombre de voyageurs sur l'année.
+        data_tests:
+          - not_null
+          - positif_ou_nul
+      - name: nb_voyageurs_et_non_voyageurs
+        description: Voyageurs + non-voyageurs.
+      - name: nb_voyageurs_annee_precedente
+        description: Nombre de voyageurs en N-1 (NULL si l'année N-1 est absente).
+      - name: evolution_pct
+        description: Évolution en % par rapport à N-1 (NULL si N-1 est absente ou nulle).
+      - name: rang_national
+        description: Rang de la gare sur l'année (1 = la plus fréquentée).
+        data_tests:
+          - not_null
+      - name: part_nationale_pct
+        description: Part de la gare dans la fréquentation nationale de l'année, en %.
+
+  - name: gld_frequentation_regions
+    description: Fréquentation agrégée par direction régionale et par année.
+    data_tests:
+      - combinaison_unique:
+          arguments:
+            colonnes: [direction_regionale, annee]
+    columns:
+      - name: direction_regionale
+        description: Direction régionale Gares & Connexions.
+        data_tests:
+          - not_null
+      - name: annee
+        description: Année de mesure.
+        data_tests:
+          - not_null
+      - name: nb_gares
+        description: Nombre de gares avec une mesure sur l'année.
+      - name: nb_voyageurs
+        description: Total des voyageurs de la région.
+        data_tests:
+          - positif_ou_nul
+      - name: evolution_pct
+        description: Évolution en % par rapport à N-1.
+      - name: part_nationale_pct
+        description: Part de la région dans la fréquentation nationale, en %.
+      - name: rang_national
+        description: Rang de la région sur l'année.
+
+  - name: gld_kpi_national
+    description: >
+      Indicateurs nationaux par année (tuiles KPI). L'année de référence
+      (pré-Covid par défaut : 2019) se règle avec la variable dbt annee_reference.
+    columns:
+      - name: annee
+        description: Année de mesure.
+        data_tests:
+          - not_null
+          - unique
+      - name: nb_gares
+        description: Nombre de gares mesurées.
+      - name: nb_voyageurs
+        description: Total national des voyageurs.
+        data_tests:
+          - positif_ou_nul
+      - name: evolution_pct
+        description: Évolution nationale en % par rapport à N-1.
+      - name: annee_reference
+        description: Année de référence utilisée pour evolution_vs_reference_pct.
+      - name: evolution_vs_reference_pct
+        description: Écart en % par rapport à l'année de référence.
+      - name: nb_gares_en_hausse
+        description: Nombre de gares dont la fréquentation augmente par rapport à N-1.
+      - name: nb_gares_en_baisse
+        description: Nombre de gares dont la fréquentation baisse par rapport à N-1.

@@ -1,0 +1,53 @@
+name: Python CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v6
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Vérifier la syntaxe Python
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = list(Path(".").rglob("*.py"))
+          files = [
+              f for f in files
+              if ".venv" not in f.parts
+              and ".git" not in f.parts
+          ]
+
+          if not files:
+              raise SystemExit("Aucun fichier Python trouvé")
+
+          for file in files:
+              ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+              print(f"OK : {file}")
+
+          print(f"{len(files)} fichier(s) Python vérifié(s)")
+          PY
+
+      - name: Installer les dépendances de test
+        run: pip install pytest pandas
+
+      - name: Exécuter les tests unitaires
+        run: python -m pytest tests/ -v
